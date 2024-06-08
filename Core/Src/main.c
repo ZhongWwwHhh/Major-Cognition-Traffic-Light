@@ -180,10 +180,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   {
     if (timeLast == 0)
     {
-      if ((!((lightStatus == 1 || lightStatus == 2) && trainDistance < 20)) || lightStatusNew == 3)
-      {
-        OLED_ShowTrainStatus(0);
-      }
+      // Change light status
       for (uint8_t i = 0; i < 10; i++)
       {
         if (lightPerset[lightStatus][i] > lightPerset[lightStatusNew][i])
@@ -206,6 +203,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     }
     else if (timeLast < 3)
     {
+      // Flash light
       for (uint8_t i = 0; i < 10; i++)
       {
         if (lightPerset[lightStatus][i] > lightPerset[lightStatusNew][i])
@@ -215,6 +213,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       }
       lightFlashStatus = (lightFlashStatus + 1) % 2;
     }
+    // Train arrived or leave
     if ((lightStatus == 1 || lightStatus == 2) && trainDistance < 20)
     {
       OLED_ShowTrainStatus(1);
@@ -223,7 +222,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     {
       OLED_ShowTrainStatus(0);
     }
+    // Some information
     OLED_ShowNum(0, 0, trainDistance, 3, 8, 1);
+    OLED_ShowNum(0, 10, timeLast, 2, 8, 1);
     OLED_Refresh();
 
     return;
@@ -341,7 +342,20 @@ int main(void)
     OLED_DrawLine(lightScreenCoord[i][0] - 1, lightScreenCoord[i][1] - 1, lightScreenCoord[i][0] - 1, lightScreenCoord[i][1] + 2, 1);
     OLED_DrawLine(lightScreenCoord[i][0] + 2, lightScreenCoord[i][1] - 1, lightScreenCoord[i][0] + 2, lightScreenCoord[i][1] + 3, 1);
   }
-
+  for (uint8_t i = 0; i < 10; i++)
+  {
+    if (lightPerset[lightStatus][i] == COLOR_RED)
+    {
+      OLED_ShowLightStatus(i, lightPerset[lightStatusNew][i]);
+    }
+  }
+  for (uint8_t i = 0; i < 10; i++)
+  {
+    if (lightPerset[lightStatus][i] == COLOR_GREEN)
+    {
+      OLED_ShowLightStatus(i, lightPerset[lightStatusNew][i]);
+    }
+  }
   OLED_Refresh();
 
   // Mark to started
