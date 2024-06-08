@@ -56,6 +56,7 @@ UART_HandleTypeDef huart1;
 
 uint8_t isStrated = 0;
 uint8_t trainDistance = 255;
+uint32_t trainDistanceRaw = 2550000 << 8;
 uint8_t lightStatus = 0;
 uint8_t lightStatusNew = 1;
 uint8_t timeLast = 0;
@@ -150,7 +151,6 @@ void OLED_ShowLightStatus(uint8_t lightIndex, uint8_t lightStatus)
   default:
     break;
   }
-  OLED_Refresh();
 }
 void OLED_ShowTrainStatus(uint8_t isTrain)
 {
@@ -168,7 +168,6 @@ void OLED_ShowTrainStatus(uint8_t isTrain)
     OLED_DrawLine(2, 44, 64, 44, 0);
     OLED_DrawLine(2, 45, 64, 45, 0);
   }
-  OLED_Refresh();
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -176,46 +175,86 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* Prevent unused argument(s) compilation warning */
   UNUSED(htim);
 
-  // 5Hz
+  // 2Hz
   if (htim == &htim2)
   {
     if (timeLast == 0)
     {
-      lightStatus = (lightStatus + 1) % 4;
-      lightStatusNew = lightStatus + 1;
-      timeLast = lightTimePerset[lightStatus];
-
-      for (uint8_t i = 0; i < 10; i++)
-      {
-        OLED_ShowLightStatus(i, lightPerset[lightStatus][i]);
-      }
-      if ((lightStatus == 1 || lightStatus == 2) && trainDistance < 20)
-      {
-        OLED_ShowTrainStatus(1);
-      }
-      else
+      if ((!((lightStatus == 1 || lightStatus == 2) && trainDistance < 20)) || lightStatusNew == 3)
       {
         OLED_ShowTrainStatus(0);
       }
+      for (uint8_t i = 0; i < 10; i++)
+      {
+        if (lightPerset[lightStatus][i] > lightPerset[lightStatusNew][i])
+        {
+          OLED_ShowLightStatus(i, lightPerset[lightStatusNew][i]);
+        }
+      }
+      for (uint8_t i = 0; i < 10; i++)
+      {
+        if (lightPerset[lightStatus][i] < lightPerset[lightStatusNew][i])
+        {
+          OLED_ShowLightStatus(i, lightPerset[lightStatusNew][i]);
+        }
+      }
+
+      // Set new status
+      lightStatus = lightStatusNew;
+      lightStatusNew = (lightStatusNew + 1) % 4;
+      timeLast = lightTimePerset[lightStatus];
     }
     else if (timeLast < 3)
     {
       for (uint8_t i = 0; i < 10; i++)
       {
-        OLED_ShowLightStatus(i, (lightPerset[lightStatus][i] && lightFlashStatus));
+        if (lightPerset[lightStatus][i] > lightPerset[lightStatusNew][i])
+        {
+          OLED_ShowLightStatus(i, (lightPerset[lightStatus][i] && lightFlashStatus));
+        }
       }
       lightFlashStatus = (lightFlashStatus + 1) % 2;
     }
+    if ((lightStatus == 1 || lightStatus == 2) && trainDistance < 20)
+    {
+      OLED_ShowTrainStatus(1);
+    }
+    else if (lightStatus == 1 || lightStatus == 2)
+    {
+      OLED_ShowTrainStatus(0);
+    }
+    OLED_ShowNum(0, 0, trainDistance, 3, 8, 1);
+    OLED_Refresh();
 
     return;
   }
   // 1Hz
   else if (htim == &htim5)
   {
+    // Decrease time
     if (timeLast)
     {
       timeLast--;
+      // Train arrived
+      if (timeLast > 3 && trainDistance < 20 && (lightStatus == 0 || lightStatus == 3))
+      {
+        timeLast = 3;
+        lightStatusNew = 1;
+      }
+      else if (timeLast < 6 && trainDistance < 20 && lightStatus == 2)
+      {
+        timeLast = 6;
+      }
     }
+
+    // SR04 get distance
+    uint8_t data = 0xA0;
+    HAL_UART_Transmit(&huart1, &data, 1, 50);
+    uint8_t distanceBytes[3] = {0};
+    HAL_UART_Receive(&huart1, distanceBytes, 3, 250);
+    trainDistanceRaw = ((uint32_t)distanceBytes[0] << 16) | ((uint32_t)distanceBytes[1] << 8) | distanceBytes[2];
+    trainDistance = (trainDistanceRaw / 10000) < 100 ? trainDistanceRaw / 10000 : 100;
+
     return;
   }
 }
@@ -319,9 +358,10 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
     // Useless
     HAL_Delay(1000);
-    /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
 }
@@ -391,7 +431,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 13000000 - 1;
+  htim2.Init.Period = 40000000 - 1;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -435,8 +475,8 @@ static void MX_TIM5_Init(void)
   htim5.Instance = TIM5;
   htim5.Init.Prescaler = 0;
   htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim5.Init.Period = 20000000 - 1;
-  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV4;
+  htim5.Init.Period = 80000000 - 1;
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
   {
@@ -474,7 +514,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 9600;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
