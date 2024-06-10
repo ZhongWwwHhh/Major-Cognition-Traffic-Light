@@ -25,6 +25,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 
 /* USER CODE END Includes */
 
@@ -48,6 +49,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim5;
 
 UART_HandleTypeDef huart1;
@@ -77,6 +79,16 @@ uint8_t lightScreenCoord[4][2] = {
     {123, 37},
     {56, 3}};
 
+// Distance send and receive
+uint8_t sendTemp[3] = {0};
+uint8_t receiveTemp[3] = {0};
+uint8_t sendBit = 0;
+uint8_t receiveBit = 0;
+uint8_t isSending = 0;
+uint8_t isReceiving = 0;
+uint32_t sendTime = 0;
+uint32_t receiveTime = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -85,6 +97,7 @@ static void MX_GPIO_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM5_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void OLED_ShowLightStatus(uint8_t lightIndex, uint8_t lightStatus)
 {
@@ -175,7 +188,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* Prevent unused argument(s) compilation warning */
   UNUSED(htim);
 
-  // 2Hz
+  // 2Hz, for screen show
   if (htim == &htim2)
   {
     if (timeLast == 0)
@@ -229,7 +242,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
     return;
   }
-  // 1Hz
+  // 1Hz, for time control
   else if (htim == &htim5)
   {
     // Decrease time
@@ -253,10 +266,73 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_UART_Transmit(&huart1, &data, 1, 50);
     uint8_t distanceBytes[3] = {0};
     HAL_UART_Receive(&huart1, distanceBytes, 3, 250);
-    trainDistanceRaw = ((uint32_t)distanceBytes[0] << 16) | ((uint32_t)distanceBytes[1] << 8) | distanceBytes[2];
-    trainDistance = (trainDistanceRaw / 10000) < 100 ? trainDistanceRaw / 10000 : 100;
-
+    // Start distance send
+    if (!isSending)
+    {
+      isSending = 1;
+      sendBit = 0;
+      memcpy(sendTemp, distanceBytes, sizeof(sendTemp));
+      HAL_TIM_Base_Start_IT(&htim3);
+    }
     return;
+  }
+  // 8kHz, for distance send
+  else if (htim == &htim3)
+  {
+    // Send distance
+    if (isSending)
+    {
+      uint8_t data = (sendTemp[sendBit / 8] >> (7 - sendBit % 8)) & 0x01;
+      HAL_GPIO_WritePin(COM_OUT_DATA_GPIO_Port, COM_OUT_DATA_Pin, data);
+      HAL_GPIO_WritePin(COM_OUT_CLK_GPIO_Port, COM_OUT_CLK_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(COM_OUT_CLK_GPIO_Port, COM_OUT_CLK_Pin, GPIO_PIN_RESET);
+      sendBit++;
+      if (sendBit == 24)
+      {
+        isSending = 0;
+        HAL_TIM_Base_Stop_IT(&htim3);
+        sendTime = HAL_GetTick();
+      }
+    }
+    return;
+  }
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  /* Prevent unused argument(s) compilation warning */
+  UNUSED(GPIO_Pin);
+
+  // Receive distance
+  if (GPIO_Pin == COM_IN_CLK_Pin)
+  {
+    // New frame
+    if (isReceiving == 0)
+    {
+      receiveBit = 0;
+      isReceiving = 1;
+      memset(receiveTemp, 0, sizeof(receiveTemp));
+    }
+    // Frame in bad time, might be wrong
+    if (HAL_GetTick() - receiveTime < 200)
+    {
+      isReceiving = 0;
+      receiveBit = 0;
+      return;
+    }
+    // Get data
+    uint8_t data = HAL_GPIO_ReadPin(COM_IN_DATA_GPIO_Port, COM_IN_DATA_Pin);
+    receiveTemp[receiveBit / 8] |= data << (7 - receiveBit % 8);
+    receiveBit++;
+    if (receiveBit == 24)
+    {
+      isReceiving = 0;
+      receiveBit = 0;
+      receiveTime = HAL_GetTick();
+      // Set train distance
+      trainDistanceRaw = ((uint32_t)receiveTemp[0] << 16) | ((uint32_t)receiveTemp[1] << 8) | receiveTemp[2];
+      trainDistance = (trainDistanceRaw / 10000) < 100 ? trainDistanceRaw / 10000 : 100;
+    }
   }
 }
 
@@ -299,6 +375,7 @@ int main(void)
   MX_TIM2_Init();
   MX_USART1_UART_Init();
   MX_TIM5_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   // Initial screen
   OLED_Init();
@@ -466,6 +543,50 @@ static void MX_TIM2_Init(void)
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
+}
+
+/**
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 10000 - 1;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
 }
 
 /**
